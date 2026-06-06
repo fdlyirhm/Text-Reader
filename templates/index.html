@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Text Reader AI | YOLO + OCR + TTS</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="bg-orb orb-1"></div>
+  <div class="bg-orb orb-2"></div>
+
+  <nav class="navbar">
+    <div class="brand">
+      <div class="logo">AI</div>
+      <div>
+        <h1>Text Reader AI</h1>
+        <p>YOLO + Full Image OCR + Text-to-Speech</p>
+      </div>
+    </div>
+
+    <button class="theme-btn" id="themeToggle" type="button">
+      <span id="themeIcon">🌙</span>
+      <span id="themeText">Dark</span>
+    </button>
+  </nav>
+
+  <main class="container">
+    <section class="hero">
+      <div>
+        <span class="badge">Prototype untuk lansia dan penderita disleksia</span>
+        <h2>Pembaca teks otomatis dari gambar</h2>
+        <p>
+          YOLO digunakan untuk menandai area teks. OCR membaca gambar penuh agar hasil bacaan
+          lebih sesuai dengan teks pada gambar, lalu gTTS mengubahnya menjadi suara.
+        </p>
+
+        <div class="steps">
+          <span>📷 Upload gambar</span>
+          <span>🧠 YOLO deteksi area teks</span>
+          <span>🔎 OCR baca gambar penuh</span>
+          <span>🔊 Output suara</span>
+        </div>
+      </div>
+
+      <div class="hero-card">
+        <strong>YOLO + OCR + TTS</strong>
+        <p>Model: <code>best.pt</code></p>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h3>Masukkan Gambar</h3>
+        <p class="muted">Gambar yang dipilih akan langsung muncul sebelum diproses.</p>
+
+        <form method="POST" enctype="multipart/form-data">
+          <label class="dropzone" id="dropzone">
+            <input id="imageInput" type="file" name="image" accept="image/*" required>
+            <div id="uploadContent">
+              <div class="upload-icon">⬆</div>
+              <strong>Klik untuk upload gambar</strong>
+              <span>JPG, PNG, WEBP, atau BMP</span>
+            </div>
+            <img id="previewImage" class="preview-image" alt="Preview gambar upload">
+          </label>
+
+          <p id="fileName" class="file-name">Belum ada gambar dipilih.</p>
+
+          <div class="control">
+            <div class="control-head">
+              <label for="conf">Confidence YOLO</label>
+              <strong id="confValue">0.45</strong>
+            </div>
+            <input id="conf" name="conf" type="range" min="0.20" max="0.80" step="0.05" value="0.45">
+            <small>Nilai ini hanya memengaruhi kotak YOLO, bukan hasil OCR teks.</small>
+          </div>
+
+          <label class="checkline">
+            <input type="checkbox" name="show_ocr_box" checked>
+            <span>Tampilkan kotak OCR biru tipis</span>
+          </label>
+
+          <button class="primary-btn" type="submit">Mulai Deteksi</button>
+        </form>
+
+        {% if error %}
+        <div class="alert">{{ error }}</div>
+        {% endif %}
+      </div>
+
+      <div class="card result-card">
+        <div class="result-head">
+          <h3>Hasil</h3>
+          {% if result %}
+          <span class="count">{{ result.box_count }} area YOLO · {{ result.ocr_count }} area OCR</span>
+          {% endif %}
+        </div>
+
+        {% if result %}
+          <div class="image-grid">
+            <div class="image-box">
+              <p>Gambar Asli</p>
+              <img src="{{ url_for('static', filename='uploads/' + uploaded_image) }}" alt="Gambar asli">
+            </div>
+
+            <div class="image-box">
+              <p>Hasil Deteksi</p>
+              <img src="{{ url_for('static', filename='outputs/' + result.output_image) }}" alt="Hasil deteksi">
+            </div>
+          </div>
+
+          <div class="text-box">
+            <div class="text-head">
+              <h4>Teks Terbaca</h4>
+              <button type="button" id="copyBtn">Salin</button>
+            </div>
+            <p id="ocrText">{{ result.text if result.text else "Tidak ada teks yang berhasil dibaca." }}</p>
+          </div>
+
+          {% if result.audio_file %}
+          <div class="audio-box">
+            <h4>Output Suara</h4>
+            <audio id="resultAudio" controls autoplay src="{{ url_for('static', filename='outputs/' + result.audio_file) }}"></audio>
+            <small class="muted">Jika suara tidak otomatis mulai, klik tombol play. Beberapa browser memblokir autoplay audio.</small>
+          </div>
+          {% endif %}
+        {% else %}
+          <div class="empty">
+            <div>🖼️</div>
+            <p>Hasil deteksi akan muncul di sini.</p>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const conf = document.getElementById("conf");
+    const confValue = document.getElementById("confValue");
+    if (conf) {
+      conf.addEventListener("input", () => {
+        confValue.textContent = Number(conf.value).toFixed(2);
+      });
+    }
+
+    const imageInput = document.getElementById("imageInput");
+    const previewImage = document.getElementById("previewImage");
+    const uploadContent = document.getElementById("uploadContent");
+    const fileName = document.getElementById("fileName");
+
+    if (imageInput) {
+      imageInput.addEventListener("change", () => {
+        const file = imageInput.files[0];
+        if (!file) return;
+
+        fileName.textContent = "Gambar dipilih: " + file.name;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          previewImage.src = e.target.result;
+          previewImage.style.display = "block";
+          uploadContent.style.display = "none";
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    const root = document.documentElement;
+    const themeToggle = document.getElementById("themeToggle");
+    const themeIcon = document.getElementById("themeIcon");
+    const themeText = document.getElementById("themeText");
+
+    function setTheme(theme) {
+      root.setAttribute("data-theme", theme);
+      localStorage.setItem("theme", theme);
+      themeIcon.textContent = theme === "dark" ? "🌙" : "☀️";
+      themeText.textContent = theme === "dark" ? "Dark" : "Light";
+    }
+
+    setTheme(localStorage.getItem("theme") || "dark");
+
+    themeToggle.addEventListener("click", () => {
+      const current = root.getAttribute("data-theme");
+      setTheme(current === "dark" ? "light" : "dark");
+    });
+
+    const copyBtn = document.getElementById("copyBtn");
+    if (copyBtn) {
+      copyBtn.addEventListener("click", async () => {
+        const text = document.getElementById("ocrText").innerText;
+        await navigator.clipboard.writeText(text);
+        copyBtn.innerText = "Tersalin";
+        setTimeout(() => copyBtn.innerText = "Salin", 1200);
+      });
+    }
+
+    const resultAudio = document.getElementById("resultAudio");
+    if (resultAudio) {
+      window.addEventListener("load", () => {
+        const playPromise = resultAudio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(() => {
+            console.log("Autoplay diblokir browser. User perlu klik play.");
+          });
+        }
+      });
+    }
+  </script>
+</body>
+</html>

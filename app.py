@@ -33,10 +33,28 @@ def clean_old_files(folder: Path, keep_latest: int = 40):
             pass
 
 
+def fix_hyphen_cases(line: str) -> str:
+    """
+    Membantu OCR mengenali tanda hubung (-).
+    OCR kadang membaca '3-month' menjadi '3 month' atau '3month'.
+    Fungsi ini memperbaiki pola umum seperti:
+    3 month -> 3-month
+    3month -> 3-month
+    1 year -> 1-year
+    7 day -> 7-day
+    """
+    units = r"(month|months|year|years|day|days|week|weeks)"
+    line = re.sub(rf"\b(\d+)\s*[-–—]\s*{units}\b", r"\1-\2", line, flags=re.IGNORECASE)
+    line = re.sub(rf"\b(\d+)\s+{units}\b", r"\1-\2", line, flags=re.IGNORECASE)
+    line = re.sub(rf"\b(\d+){units}\b", r"\1-\2", line, flags=re.IGNORECASE)
+    return line
+
+
 def clean_ocr_text(text: str) -> str:
     """
-    Membersihkan karakter OCR yang sering kebaca salah.
-    Contoh: separator judul '|' sering terbaca sebagai huruf I/l.
+    Membersihkan OCR tanpa membuang tanda hubung (-).
+    Yang dibuang hanya separator palsu seperti | / I / l yang sering muncul
+    di antara kata, bukan tanda minus/hyphen.
     """
     if not text:
         return ""
@@ -45,18 +63,23 @@ def clean_ocr_text(text: str) -> str:
     for line in text.splitlines():
         line = line.strip()
 
-        # Hilangkan token OCR yang berdiri sendiri dan sering muncul sebagai separator palsu.
-        # Contoh: "PC Game Pass I 3-month" -> "PC Game Pass 3-month"
+        # Hilangkan separator palsu di antara kata/angka:
+        # "PC Game Pass I 3-month" -> "PC Game Pass 3-month"
+        # "PC Game Pass | 3-month" -> "PC Game Pass 3-month"
         line = re.sub(r"(?<=\w)\s+[|Il]\s+(?=[\w\d])", " ", line)
 
-        # Rapikan spasi sebelum tanda baca
+        # Perbaiki OCR tanda hubung yang hilang pada pola umum
+        line = fix_hyphen_cases(line)
+
+        # Rapikan spasi sebelum tanda baca, tetapi JANGAN hilangkan tanda -
         line = re.sub(r"\s+([,.!?;:])", r"\1", line)
+        line = re.sub(r"\s*-\s*", "-", line)
 
         # Rapikan spasi ganda
         line = re.sub(r"\s{2,}", " ", line)
 
-        # Buang baris yang cuma berisi simbol
-        if re.fullmatch(r"[\W_]+", line):
+        # Buang baris yang hanya berisi simbol selain tanda hubung yang bermakna
+        if re.fullmatch(r"[^\w-]+", line):
             continue
 
         if line:
@@ -65,9 +88,19 @@ def clean_ocr_text(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def enhance_for_ocr(img_bgr, scale=2):
+def enhance_for_ocr(img_bgr, scale=3):
+    """
+    Scale 3x agar simbol kecil seperti '-' lebih mudah terbaca OCR.
+    """
     h, w = img_bgr.shape[:2]
-    return cv2.resize(img_bgr, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
+    up = cv2.resize(img_bgr, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
+
+    # Sharpen ringan agar garis tipis seperti '-' lebih tegas
+    kernel = np.array([[0, -1, 0],
+                       [-1, 5, -1],
+                       [0, -1, 0]])
+    sharp = cv2.filter2D(up, -1, kernel)
+    return sharp, scale
 
 
 def sort_ocr_result(result):
@@ -99,7 +132,7 @@ def sort_ocr_result(result):
     return sorted(items, key=lambda d: (d["yc"], d["x"]))
 
 
-def group_text_lines(items, y_tolerance=22):
+def group_text_lines(items, y_tolerance=28):
     if not items:
         return ""
 
@@ -122,7 +155,7 @@ def group_text_lines(items, y_tolerance=22):
     text_lines = []
     for line in lines:
         row = sorted(line["items"], key=lambda d: d["x"])
-        words = [d["text"] for d in row if d["score"] >= 0.35]
+        words = [d["text"] for d in row if d["score"] >= 0.28]
         if words:
             text_lines.append(" ".join(words))
 
@@ -131,10 +164,9 @@ def group_text_lines(items, y_tolerance=22):
 
 def read_text_full_image(img_bgr):
     """
-    OCR membaca gambar penuh, bukan crop YOLO kecil.
-    Hasilnya lebih stabil dan tidak terlalu terpotong.
+    OCR membaca gambar penuh agar teks tidak terpecah dari crop YOLO.
     """
-    img_ocr = enhance_for_ocr(img_bgr, scale=2)
+    img_ocr, scale = enhance_for_ocr(img_bgr, scale=3)
 
     try:
         result, _ = ocr_engine(img_ocr)
@@ -144,13 +176,13 @@ def read_text_full_image(img_bgr):
 
     items = sort_ocr_result(result)
 
-    # Koordinat OCR dibagi 2 karena gambar OCR diperbesar 2x
+    # Koordinat OCR dibagi scale agar cocok dengan gambar asli
     for item in items:
-        item["box"] = item["box"] / 2
-        item["x"] = item["x"] / 2
-        item["yc"] = item["yc"] / 2
+        item["box"] = item["box"] / scale
+        item["x"] = item["x"] / scale
+        item["yc"] = item["yc"] / scale
 
-    text = group_text_lines(items, y_tolerance=22)
+    text = group_text_lines(items, y_tolerance=28)
     return text, items
 
 
@@ -180,7 +212,6 @@ def process_image(image_path, conf_threshold=0.45, show_ocr_box=True):
     h_img, w_img = img.shape[:2]
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-    # YOLO untuk visualisasi area teks
     yolo_boxes = run_yolo_boxes(image_path, conf_threshold=conf_threshold)
 
     for x1, y1, x2, y2, score in yolo_boxes:
@@ -201,13 +232,11 @@ def process_image(image_path, conf_threshold=0.45, show_ocr_box=True):
             cv2.LINE_AA
         )
 
-    # OCR baca gambar penuh
     final_text, ocr_items = read_text_full_image(img)
 
-    # Kotak OCR biru tipis
     if show_ocr_box:
         for item in ocr_items:
-            if item["score"] < 0.35:
+            if item["score"] < 0.28:
                 continue
             pts = item["box"].astype(int)
             cv2.polylines(img_rgb, [pts], isClosed=True, color=(0, 170, 255), thickness=1)

@@ -1,0 +1,8 @@
+flask
+ultralytics
+opencv-python-headless
+pillow
+gTTS
+rapidocr-onnxruntime
+onnxruntime
+numpy
